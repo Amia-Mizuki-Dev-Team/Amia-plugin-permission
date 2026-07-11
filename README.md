@@ -1,21 +1,35 @@
 # Amia-plugin-permission
 
-`Amia-plugin-permission` 是 Amia / Mizuki 插件生态的最小权限服务骨架。它实现 `amia-core` 的 `PermissionProvider` 协议，通过静态配置判断某个身份是否拥有权限节点。
+`Amia-plugin-permission` 是 Amia / Mizuki 插件生态的最小权限服务。它实现 `amia-core.PermissionProvider`，通过静态配置判断某个身份是否拥有指定权限节点。
 
-当前版本的目标是提供稳定契约和默认拒绝行为，不提前建立复杂角色数据库、群内管理指令或网页后台。
+## 插件作用
+
+它解决的是“其他插件不要各自写一套权限判断”的问题。
+
+典型消费者：
+
+```text
+Amia-plugin-group      → 公告增删改权限
+Amia-plugin-economy    → 高风险管理指令
+Amia-plugin-audit      → 审计查询权限
+Amia-plugin-welcome    → 群级欢迎配置权限
+后续后台或管理插件      → permission.manage
+```
+
+当前版本只提供静态、默认拒绝、allow-only 的基础规则，不包含角色数据库、拒绝规则、临时授权或群管理员自动同步。
 
 ## 当前能力
 
-- 启动时注册 `PermissionProvider("static")`。
-- 默认拒绝所有未配置权限。
-- 支持 canonical identity。
-- 支持未绑定的外部身份。
-- 支持全局权限节点。
-- 支持上下文级权限节点。
-- 支持节点和身份通配符。
+- 启动时注册 `PermissionProvider("static")`；
+- 默认拒绝所有未配置权限；
+- 支持 canonical identity；
+- 支持未绑定外部身份；
+- 支持全局权限节点；
+- 支持上下文级权限节点；
+- 支持节点通配符和身份通配符；
 - 配置错误时降级为空规则，不阻断 NoneBot 启动。
 
-## 权限接口
+## Provider 接口
 
 ```python
 await provider.has_permission(
@@ -31,6 +45,14 @@ await provider.has_permission(
 True | False
 ```
 
+消费者应通过 Registry 获取：
+
+```python
+provider = registry.get_permission_provider("static")
+```
+
+Provider 不存在、超时或异常时必须默认拒绝。
+
 ## 配置
 
 配置项：
@@ -39,9 +61,7 @@ True | False
 AMIA_PERMISSION_RULES
 ```
 
-可在 NoneBot 配置中提供字典，也可以提供 JSON 字符串。
-
-示例：
+可提供字典或 JSON 字符串：
 
 ```env
 AMIA_PERMISSION_RULES={"group.notice.manage":["canonical:123456789"],"economy.admin@group:987654":["canonical:123456789","external:10001:20002"]}
@@ -71,13 +91,11 @@ group.notice.manage
 
 ### 上下文节点
 
-格式：
-
 ```text
 <permission_node>@<context_id>
 ```
 
-示例：
+例如：
 
 ```text
 group.notice.manage@group:123456
@@ -90,7 +108,7 @@ group.notice.manage@group:123456
 *@group:123456
 ```
 
-`*` 表示匹配所有权限节点。应谨慎使用，尤其不要向普通用户配置。
+`*` 表示允许所有节点，应谨慎配置。
 
 ## 身份选择器
 
@@ -100,25 +118,13 @@ group.notice.manage@group:123456
 canonical:<canonical_user_id>
 ```
 
-示例：
-
-```text
-canonical:123456789
-```
-
 ### 外部身份
 
 ```text
 external:<self_id>:<user_id>
 ```
 
-示例：
-
-```text
-external:10001:20002
-```
-
-适用于尚未完成 qbind 的身份，但该选择器与当前 Bot 实例绑定。
+适用于尚未完成 qbind 的身份，但与当前 Bot 实例绑定。
 
 ### opaque 身份
 
@@ -126,27 +132,23 @@ external:10001:20002
 opaque:<ResolvedIdentity.opaque_id>
 ```
 
-绑定用户的 opaque ID 当前等于 canonical ID；未绑定身份格式为：
-
-```text
-opaque:unbound:<self_id>:<user_id>
-```
-
-新配置优先使用 `canonical:` 或 `external:`，不要依赖 opaque 内部格式作为长期公共接口。
+不建议把 opaque 内部格式作为长期公共配置。新规则优先使用 `canonical:` 或 `external:`。
 
 ### 身份通配符
 
-规则值中使用：
+规则值中的：
 
 ```text
 *
 ```
 
-表示所有身份均允许。只建议用于完全公开的能力节点。
+表示所有身份都允许该节点。
 
-## 判断顺序
+## allow-only 语义
 
-Provider 按以下顺序检查：
+当前 Provider 只有“允许”规则，没有显式 deny。
+
+检查顺序：
 
 ```text
 <node>@<context>
@@ -155,33 +157,59 @@ Provider 按以下顺序检查：
 *
 ```
 
-任何一条规则包含当前身份选择器或 `*` 时返回 `True`。
+这些规则是累加关系，不是覆盖关系：
 
-未命中规则时返回 `False`。
+- 上下文规则命中时允许；
+- 上下文规则未命中，但全局规则命中时仍然允许；
+- 当前版本不能用上下文规则撤销一个全局允许；
+- 未命中任何允许规则时返回 `False`。
 
-## 使用方式
+例如：
+
+```json
+{
+  "economy.admin": ["canonical:10001"],
+  "economy.admin@group:123": ["canonical:10002"]
+}
+```
+
+则：
+
+- `10001` 在所有群都允许；
+- `10002` 只在群 `123` 允许；
+- 上下文规则不会阻止 `10001`。
+
+如果以后需要显式 deny，必须扩展正式规则模型和优先级测试，不能直接在当前字符串规则中临时加前缀。
+
+## 消费者接入示例
 
 ```python
-from src.plugins.amia_core import registry
+from src.plugins.amia_core import call_provider_safe, registry
 
 provider = registry.get_permission_provider("static")
 if provider is None:
-    # 权限服务未启动时默认拒绝
     allowed = False
 else:
-    allowed = await provider.has_permission(
+    result = await call_provider_safe(
+        provider.has_permission,
         resolved_identity,
         "group.notice.manage",
         f"group:{event.group_id}",
+        timeout=0.5,
     )
+    allowed = bool(result.success and result.value)
+
+if not allowed:
+    await matcher.finish("权限不足")
 ```
 
-调用方应遵循：
+调用方要求：
 
-- Provider 不存在时默认拒绝。
-- 权限检查异常时默认拒绝。
-- 不把昵称作为权限主体。
-- 权限节点使用稳定的点分命名。
+- Provider 缺失默认拒绝；
+- 异常和超时默认拒绝；
+- 不把昵称、群名或显示名当作权限主体；
+- 不把具体用户或群号编码进权限节点名称；
+- `context_id` 使用稳定格式，例如 `group:<group_id>`。
 
 ## 权限节点命名建议
 
@@ -195,52 +223,80 @@ permission.manage
 welcome.configure
 ```
 
-节点名称应表达能力，不应包含具体用户或群号。
+权限节点表示能力；作用群由 `context_id` 或规则键中的 `@<context>` 表达。
+
+## 启动和注册
+
+NoneBot startup 时读取配置并注册：
+
+```python
+registry.register_permission_provider(
+    "static",
+    permission_provider,
+    replace=True,
+)
+```
+
+推荐加载关系：
+
+```text
+amia-core
+qbind / IdentityResolver
+permission
+业务消费者插件
+```
+
+Permission 本身不要求 qbind 存在，但 canonical 规则只有在上游解析出 canonical ID 时才会命中。未绑定用户可以使用 external 规则。
 
 ## 当前不包含
 
-- 角色继承。
-- SQLite 权限数据库。
-- 临时授权和到期时间。
-- 群管理员自动同步。
-- 黑名单/白名单管理指令。
-- 网页管理面板。
+- 显式 deny；
+- 角色和角色继承；
+- SQLite 权限数据库；
+- 临时授权和过期时间；
+- 群管理员自动同步；
+- 黑名单/白名单管理指令；
+- 网页管理面板；
 - 审计查询指令。
 
-这些功能应在静态 Provider 骨架经过实际使用验证后再增加。
-
 ## 测试
-
-运行：
 
 ```powershell
 $env:PYTHONPATH = '<project-root>'
 python -m unittest discover -s src/plugins/Amia-plugin-permission/tests -v
 ```
 
-测试应覆盖：
+当前测试覆盖：
 
-- 默认拒绝。
-- canonical 身份命中。
-- 外部身份命中。
-- 上下文规则优先。
-- 节点通配符。
-- 身份通配符。
-- 规则热替换。
+- 默认拒绝；
+- canonical 身份；
+- 外部身份；
+- 上下文规则；
+- 节点和身份通配符；
+- 规则替换。
 
-## 后续开发建议
+后续应补：
 
-1. 先把 Group 公告管理接入 `group.notice.manage`。
-2. 将高风险 Economy 管理能力接入明确节点。
-3. 权限变更接入 `AuditLogger("sqlite")`。
-4. 收集真实需求后再设计角色和持久化模型。
-5. 增加持久化时必须提供迁移、备份和回滚方案。
+- Provider 配置 JSON 解析；
+- 无效配置降级；
+- 全局与上下文规则的累加语义；
+- `call_provider_safe` 超时后的默认拒绝集成测试。
+
+## 后续开发顺序
+
+1. Group 公告管理接入 `group.notice.manage`；
+2. Economy 高风险操作接入明确节点；
+3. 权限变更接入 `AuditLogger("sqlite")`；
+4. 收集真实使用需求；
+5. 再决定是否需要角色、deny 和持久化。
+
+新增持久化前必须先提供迁移、备份和回滚方案。
 
 ## 安全边界
 
-- 默认拒绝。
-- 不因 Provider 缺失自动放行。
-- 不以昵称、群名或显示名作为身份。
-- 不将超级权限通配符作为默认配置。
-- 不在日志中输出完整权限配置和敏感身份信息。
+- 默认拒绝；
+- 不因 Provider 缺失自动放行；
+- 不使用昵称作为身份；
+- 不默认配置超级通配符；
+- 不在日志中输出完整规则和敏感身份信息；
 - 当前仓库尚未确定公开许可证。
