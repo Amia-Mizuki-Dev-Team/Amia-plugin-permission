@@ -1,0 +1,18 @@
+gensokyo:
+  last_verified_release: "009"
+  verified_at: "2026-07-25T14:29:00Z"
+  baseline_commit: "3d931d05650e8d35f33b374e4d55f268088ab04d"
+  verification:
+    status: partial
+    evidence: ["tests/"]
+  modes:
+    string_message: false
+    array_message: false
+    use_uin_true: false
+    use_uin_false: false
+    markdown: false
+    keyboard: false
+  automated_tested: false
+  live_tested: false
+  known_issues:
+    - "Release009 shared fixtures pass; repository-specific integration is pending."
