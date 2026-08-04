@@ -1,13 +1,10 @@
 # Amia-plugin-permission
 
-`Amia-plugin-permission` is the default-deny permission provider for the Amia
-plugin ecosystem. It evaluates namespaced identities without depending on
-display names, private plugin databases, or qbind.
+Amia 插件生态的默认拒绝权限 Provider。它使用带命名空间的身份和精确作用域进行判断，不依赖显示昵称、其他插件私有数据库或 qbind 的内部文件。
 
-## Public API
+## 公共接口
 
-The provider is registered as `static` during NoneBot startup. Other plugins
-should obtain it through `amia-core` or use the root functions:
+插件启动时以 `static` 名称注册到 `amia-core`：
 
 ```python
 from nonebot import require
@@ -21,7 +18,7 @@ decision = await permission.check_permission(
 )
 ```
 
-The structured decision is:
+返回结构：
 
 ```python
 {
@@ -32,18 +29,11 @@ The structured decision is:
 }
 ```
 
-The root module exports equivalent `check_permission`, `require_permission`,
-`grant_permission`, `revoke_permission`, `list_permissions`, and
-`health_check` functions. `require_permission` raises `PermissionError` for a
-denied decision.
+根模块还提供 `check_permission`、`require_permission`、`grant_permission`、`revoke_permission`、`list_permissions` 和 `health_check`。`require_permission` 在拒绝时抛出 `PermissionError`。
 
-## Rule model and precedence
+## 规则与优先级
 
-Rules support global and scoped permissions, roles, runtime grants, explicit
-denies, temporary expiry, blacklist, whitelist, and opt-in superusers. A
-permission key may be an exact value or a wildcard such as
-`group.notice.*`. A scoped rule uses `permission@group:<id>` or a structured
-`scope` field.
+规则支持全局/作用域权限、角色、运行时授权、显式拒绝、临时过期、黑名单、白名单和可选 SUPERUSER。权限键支持精确值和 `group.notice.*` 通配符；作用域使用 `permission@group:<id>` 或结构化 `scope`。
 
 ```json
 {
@@ -62,52 +52,22 @@ permission key may be an exact value or a wildcard such as
       "selector": "canonical:10002",
       "effect": "deny"
     }
-  ],
-  "roles": {
-    "moderator": {
-      "selectors": ["canonical:10002"],
-      "permissions": ["group.notice.*"],
-      "scope": "group:123"
-    }
-  }
+  ]
 }
 ```
 
-Evaluation order is deterministic:
+判断顺序固定为：
 
 ```text
-blacklist
-→ whitelist gate
-→ explicit deny
-→ configured superuser
-→ scoped allow
-→ global allow
-→ default deny
+黑名单 → 白名单门禁 → 显式拒绝 → 配置 SUPERUSER
+→ 作用域允许 → 全局允许 → 默认拒绝
 ```
 
-By default even a configured superuser does not bypass an explicit deny;
-`AMIA_PERMISSION_SUPERUSER_BYPASS_DENIES` can opt into that behavior. Rules
-with an expired `expires_at` never match. Group context is exact and cannot
-leak to another group.
+默认情况下 SUPERUSER 也不能绕过显式拒绝。过期规则不会命中，群作用域必须精确匹配，不能泄漏到其他群。
 
-Legacy allow-only configuration remains supported:
+## Audit 对接
 
-```json
-{
-  "group.notice.manage": ["canonical:10001"],
-  "economy.admin@group:123": ["external:adapter-1:20002"]
-}
-```
-
-## Audit integration
-
-Runtime grants and revocations attempt to use the `sqlite` Audit provider
-through the Core Registry. Permission checks continue to work if Audit is not
-loaded. Set `AMIA_PERMISSION_AUDIT_REQUIRED` to require a successful audit for
-runtime changes; a failed audit then rolls the change back. No caller writes an
-Audit database directly.
-
-Configuration names:
+运行时授权和撤销会尝试调用 `sqlite` Audit Provider。Audit 未加载时，普通权限检查仍可工作；设置 `AMIA_PERMISSION_AUDIT_REQUIRED=true` 后，审计失败会回滚运行时权限修改。
 
 ```text
 AMIA_PERMISSION_RULES
@@ -115,14 +75,20 @@ AMIA_PERMISSION_AUDIT_REQUIRED
 AMIA_PERMISSION_SUPERUSER_BYPASS_DENIES
 ```
 
-## Validation
+## Release010 边界
+
+- `self_id`、`user_id` 和群作用域均允许字符串/OpenID；
+- 不从显示昵称推断权限；
+- Provider 缺失时调用方必须安全拒绝；
+- `compatibility.yml` 只记录自动化证据，真实管理员/SUPERUSER 场景未执行时保持未验证。
+
+## 测试
 
 ```powershell
 $env:PYTHONPATH = "H:\Amia-Develop"
-H:\Amia-Develop\.venv\Scripts\python.exe -m compileall -q .
 H:\Amia-Develop\.venv\Scripts\python.exe -m unittest discover -s tests -v
+H:\Amia-Develop\.venv\Scripts\python.exe -m compileall -q .
+git diff --check
 ```
 
-The offline benchmark uses two warmups and five measured runs for 100/1,000/
-10,000 rules, 1,000/10,000/100,000 permission checks, and expired-rule
-cleanup. It uses synthetic identities and no network or production data.
+Benchmark 只使用虚构身份和离线规则，不访问网络或生产数据。
